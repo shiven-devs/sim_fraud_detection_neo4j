@@ -1,0 +1,87 @@
+Build a hackathon-ready MVP called "Mini-ASTR": a system that detects fake or fraudulent SIM connections by finding the same face registered under multiple identities. It is inspired by India's DoT ASTR system. Use ONLY synthetic or public benchmark data, never real subscriber data.
+
+## HOW TO WORK (IMPORTANT)
+- The work is split into PHASE 1 (core app) and PHASE 2 (optional RAG assistant).
+- Build ONLY Phase 1 now. Do NOT create any Phase 2 code, files, routes, nodes, indexes or dependencies until I explicitly say "start Phase 2".
+- Design Phase 1 so Phase 2 can be added later without refactoring (keep the Neo4j and LLM helpers modular).
+- After each step, tell me what to run to verify it works before moving on.
+
+## Tech stack
+- Frontend + backend: Next.js 14 (App Router, TypeScript, Tailwind CSS). Use API route handlers as the backend.
+- Face recognition service: Python 3.10+ with FastAPI, using DeepFace (Facenet512, 512-d embeddings), rapidfuzz for fuzzy name matching, and networkx for clustering.
+- Database: Neo4j (Aura Free or Docker, v5.11+) with a vector index. Use neo4j-driver in Next.js and the neo4j Python driver in the Python service.
+- Next.js calls the Python service over HTTP (e.g. http://localhost:8000).
+
+## Background: how ASTR works
+1. Subscriber photos come from telecom operators (TSPs).
+2. Faces are detected and analysed into a "faceprint" (embedding).
+3. Similar-looking faces are grouped together.
+4. Textual KYC details (name, DOB, address, bank account, ID proof) are compared with fuzzy string matching to group approximately similar names.
+5. Flag cases where the same face holds SIMs under multiple names, DOBs, bank accounts or address proofs, or where more than 8 SIMs are held in one person's name.
+
+# PHASE 1: CORE APP (build this now)
+
+## Graph model (Neo4j)
+- (:Subscriber {id, name, dob, address, kyc_id, bank_account})
+- (:Face {id, embedding, image_path})
+- (:SIM {number, activated_on})
+- (:TSP {name})
+- (:Identity {id}) represents a cluster of faces judged to be the same person
+- (:Review {decision, reviewer, timestamp, note})
+- Relationships: (Subscriber)-[:HAS_FACE]->(Face), (Subscriber)-[:OWNS]->(SIM), (SIM)-[:ISSUED_BY]->(TSP), (Face)-[:SIMILAR_TO {score}]->(Face), (Face)-[:BELONGS_TO]->(Identity), (Identity)-[:REVIEWED_AS]->(Review)
+- Vector index face_idx on Face.embedding (512 dims, cosine). Add uniqueness constraints on ids.
+
+## Synthetic data generator (script)
+- Download faces with scikit-learn: fetch_lfw_people(min_faces_per_person=3, color=True) and save them to /faces/<person_name>/<n>.jpg.
+- Use Faker (locale en_IN) to generate about 100 subscribers, each with name, DOB, address, KYC id, bank account, and 1-3 SIMs across 3 TSPs. Assign each subscriber one LFW person as their face (one photo).
+- Plant fraud cases using DIFFERENT photos of the SAME LFW person (different angle and lighting), never the same image file:
+  (a) 5-8 people, each registered 2-3 times as separate subscribers with slightly altered names (e.g. "Rajesh Kumar", "Rajesh Kumr", "Rakesh Kumar"), different DOBs and different SIMs;
+  (b) one subscriber holding 9+ SIMs;
+  (c) one face sharing a bank account with a differently named subscriber.
+- Save a ground_truth.json listing the planted fraud clusters so detection precision and recall can be measured and shown in the demo.
+- Load everything into Neo4j (Subscriber, Face, SIM, TSP nodes and relationships), then call the face service to embed, cluster and flag.
+
+## Python face service (FastAPI)
+- POST /embed: accepts an image, returns a 512-d embedding.
+- POST /ingest: embeds all images in a folder and stores Face nodes in Neo4j.
+- POST /cluster: for each face, query the vector index (k=10), create SIMILAR_TO edges where cosine score > 0.8 (configurable), run connected components with networkx, and write Identity nodes and BELONGS_TO edges.
+- POST /fuzzy-check: for each Identity cluster, compare subscriber names with rapidfuzz token_sort_ratio (> 85 is suspicious) and compare DOB, address and bank account. Return a risk score per cluster.
+- POST /search: upload a photo and return the top 5 most similar faces with scores and their subscribers.
+- GET /evaluate: compare detected clusters with ground_truth.json and return precision and recall.
+
+## Next.js app (pages and API routes)
+1. Dashboard: metric cards (total subscribers, total SIMs, suspicious clusters, SIMs affected, detection precision/recall), plus a table of flagged clusters sorted by risk score.
+2. Cluster detail page: face thumbnails side by side, names, DOBs and SIMs, the reasons flagged, and an interactive graph visualisation (react-force-graph or vis-network).
+3. Reviewer actions: Confirm Fraud / Reject (false match) buttons that write a Review node. A cluster is only "confirmed" after human review.
+4. Face search page: upload a photo, call the Python /search endpoint, and show the top matches with similarity scores.
+5. Rules section: the ">8 SIMs per person" check and the same-face-multiple-identities check, each driven by a Cypher query.
+6. API routes: /api/stats, /api/clusters, /api/clusters/[id], /api/review, /api/search (proxies to the Python service).
+7. Keep Neo4j access in one reusable helper (lib/neo4j.ts) so Phase 2 can reuse it.
+
+## Key Cypher queries
+- Same face, multiple identities: MATCH (i:Identity)<-[:BELONGS_TO]-(:Face)<-[:HAS_FACE]-(s:Subscriber) WITH i, collect(DISTINCT s.name) AS names, count(DISTINCT s) AS n WHERE n > 1 RETURN i, names, n
+- More than 8 SIMs: MATCH (s:Subscriber)-[:OWNS]->(m:SIM) WITH s, count(m) AS sims WHERE sims > 8 RETURN s, sims
+- Vector search: CALL db.index.vector.queryNodes('face_idx', 5, $embedding) YIELD node, score
+
+## Responsible-AI features (important for judges)
+- Show similarity scores instead of yes/no, with a configurable threshold.
+- Mandatory human-in-the-loop review before any case is confirmed.
+- Audit log: store who ran each search or review, and when.
+- UI disclaimer: this is a demo using public benchmark and synthetic data, and facial recognition can produce false matches and show bias.
+
+## Deliverables (Phase 1)
+- Folder structure: /web (Next.js), /face-service (Python), /scripts (data generator and loader), docker-compose.yml for Neo4j.
+- .env.example with NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD, FACE_SERVICE_URL.
+- README with setup steps and a 2-minute demo script.
+- Build order: data generator, then face service, then dashboard and cluster pages, then face search page.
+- Keep the code simple, commented and runnable within a day. Prioritise a working end-to-end demo over polish.
+
+# PHASE 2: RAG / GraphRAG ASSISTANT (DO NOT BUILD UNTIL I SAY "start Phase 2")
+
+When I say "start Phase 2", add the following without breaking Phase 1:
+- Add env var ANTHROPIC_API_KEY and a read-only Neo4j user.
+- "Ask the Graph" chat page with /api/chat. Text-to-Cypher: send the graph schema and 3-4 few-shot question-to-Cypher examples to the Claude API, execute the generated Cypher through the read-only Neo4j user (reject CREATE, DELETE, MERGE, SET, REMOVE, DROP), then have the LLM summarise the results in plain English. Always show the executed Cypher in the UI.
+- "Explain this flag" button on the cluster detail page (/api/explain): retrieve the cluster subgraph and generate a short case summary for the reviewer.
+- Policy RAG: add (:Chunk {text, embedding}) nodes holding synthetic SIM/KYC policy text, a vector index chunk_idx (384 dims, cosine), and a POST /embed-text endpoint in the Python service using sentence-transformers (all-MiniLM-L6-v2). Retrieve the top 3 chunks by similarity and cite them in explanations (e.g. "Violates the 9-SIM-per-ID limit").
+- The LLM must never identify people from images. It only explains data already in the graph.
+- Update the README with Phase 2 setup steps.

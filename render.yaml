@@ -1,0 +1,27 @@
+# Face service only. The website deploys on Vercel, and the graph lives on Neo4j Aura.
+# Use a 2 GB instance. Free and starter Render plans have 512 MB and are killed while Facenet512 loads.
+
+services:
+  - type: web
+    name: mini-astr-face
+    runtime: python
+    plan: standard
+    rootDir: face-service
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.11"
+      - key: SIMILARITY_THRESHOLD
+        value: "0.8"
+      - key: FUZZY_NAME_THRESHOLD
+        value: "85"
+      - key: NEO4J_URI
+        sync: false
+      - key: NEO4J_USER
+        sync: false
+      - key: NEO4J_PASSWORD
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
