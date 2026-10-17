@@ -1,5 +1,5 @@
 # Mini-ASTR
-
+hosted on https://sim-fraud-detection-neo4j.vercel.app/
 A hackathon demo that flags synthetic SIM connections when one face is registered under more than one identity. It follows the shape of India's DoT ASTR system: face embeddings, fuzzy KYC comparison, a SIM-count rule, and a human review before anything is confirmed.
 
 Photos come from the public [Labeled Faces in the Wild](http://vis-www.cs.umass.edu/lfw/) benchmark through scikit-learn. Names, dates of birth, addresses, KYC ids and bank accounts are generated with Faker. Do not load real subscriber data.
